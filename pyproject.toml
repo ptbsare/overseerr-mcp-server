@@ -1,0 +1,27 @@
+[project]
+name = "overseerr-mcp-server"
+version = "0.1.0"
+description = "FastMCP server for interacting with Overseerr media request management system"
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [
+    {name = "ptbsare", email = "496725701@qq.com"}
+]
+license = {text = "MIT"}
+dependencies = [
+    "httpx>=0.28.1",
+    "fastmcp>=0.1.0",
+    "python-dotenv>=1.0.0",
+    "pydantic>=2.0.0",
+]
+
+[project.scripts]
+overseerr-mcp-server = "overseerr_mcp_server.server:main"
+
+[project.urls]
+"Homepage" = "https://github.com/ptbsare/overseerr-mcp-server"
+"Bug Tracker" = "https://github.com/ptbsare/overseerr-mcp-server/issues"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
