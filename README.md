@@ -11,11 +11,11 @@ Project Repository: [https://github.com/ptbsare/overseerr-mcp-server](https://gi
 The server implements the following tools to interact with Overseerr:
 
 -   `overseerr_status`: Get the status of the Overseerr server.
--   `overseerr_movie_requests`: Get a paginated list of movie requests that satisfy the filter arguments. Accepts optional `take` (default 7) and `skip` (default 0) parameters for pagination.
--   `overseerr_tv_requests`: Get a paginated list of TV show requests that satisfy the filter arguments. Accepts optional `take` (default 7) and `skip` (default 0) parameters for pagination.
+-   `overseerr_movie_requests`: Get a paginated list of movie requests that satisfy the filter arguments. Accepts optional `status`, `start_date` (YYYY-MM-DDTHH:MM:SS.mmmZ format), `take` (default 7), and `skip` (default 0) parameters.
+-   `overseerr_tv_requests`: Get a paginated list of TV show requests that satisfy the filter arguments. Accepts optional `status`, `start_date` (YYYY-MM-DDTHH:MM:SS.mmmZ format), `take` (default 7), and `skip` (default 0) parameters.
 -   `overseerr_request_movie`: Submit a movie request using its TMDB ID. Accepts an optional `user_id` parameter to specify the Overseerr user making the request (priority: parameter > `REQUEST_USER_ID` env var > default 1).
 -   `overseerr_request_tv`: Submit a TV show request using its TMDB ID, optionally specifying seasons. Accepts an optional `user_id` parameter (same priority as movie requests).
--   `overseerr_search_media`: Search for movies and TV shows available on Overseerr.
+-   `overseerr_search_media`: Search for movies and TV shows available on Overseerr. Accepts `query` and optional `page` (default 1) parameters.
 
 ### Example prompts
 
@@ -24,19 +24,19 @@ It's good to first instruct your AI assistant (e.g., Claude) to use the Overseer
 Try prompts like these:
 
 -   Get the status of our Overseerr server.
--   Show me all the movie requests that are currently pending.
--   List all TV show requests from the last month that are now available.
+-   Show me the first 5 movie requests that are currently pending. (Uses `take=5`)
+-   List all TV show requests from 2024-01-01 that are now available. (Uses `start_date`)
 -   What movies have been requested but are not available yet?
 -   What TV shows have recently become available in our library?
 -   Search for the movie "Dune: Part Two" on Overseerr.
--   Request the movie with TMDB ID 693134.
+-   Request the movie with TMDB ID 693134 as user 5. (Uses `user_id=5`)
 -   Request seasons 1 and 2 for the TV show with TMDB ID 1396.
 
 ## Configuration
 
-### Overseerr API Key & URL
+### Environment Variables
 
-You need to provide your Overseerr API key and URL. There are two ways to configure this:
+You need to provide your Overseerr API key and URL. You can also optionally specify a default user ID for requests. There are two ways to configure this:
 
 1.  **Add to server config (preferred for clients like Claude Desktop):**
 
@@ -45,24 +45,25 @@ You need to provide your Overseerr API key and URL. There are two ways to config
     ```json
     {
       "mcpServers": {
-        "overseerr-mcp": {
-          "command": "uv", // Use uv command runner
+        "overseerr-mcp-server": {
+          "command": "uv",
           "args": [
              "run",
              "--directory",
-             "/path/to/overseerr-mcp-server", // Replace with the actual path to the cloned repo
-             "overseerr-mcp-server" // The script name defined in pyproject.toml
+             "/path/to/overseerr-mcp-server",
+             "overseerr-mcp-server"
            ],
           "env": {
             "OVERSEERR_API_KEY": "<your_api_key_here>",
-            "OVERSEERR_URL": "<your_overseerr_url>"
-"REQUEST_USER_ID": "1" // Optional: Overseerr user ID to make requests as (defaults to 1)
+            "OVERSEERR_URL": "<your_overseerr_url>",
+            "REQUEST_USER_ID": "1"
           }
         }
       }
     }
     ```
     *Replace `/path/to/overseerr-mcp-server` with the actual path where you cloned the repository.*
+    *`REQUEST_USER_ID` is optional; if omitted, requests default to user ID 1 unless overridden by the tool parameter.*
 
 2.  **Create a `.env` file:**
 
@@ -70,10 +71,10 @@ You need to provide your Overseerr API key and URL. There are two ways to config
 
     ```dotenv
     OVERSEERR_API_KEY=your_api_key_here
-    REQUEST_USER_ID=1 # Optional: Overseerr user ID to make requests as (defaults to 1)
     OVERSEERR_URL=your_overseerr_url_here
+    REQUEST_USER_ID=1
     ```
-    The server will load these variables when run from the project directory.
+    *`REQUEST_USER_ID` is optional; if omitted, requests default to user ID 1 unless overridden by the tool parameter.*
 
 *Note: You can find the API key in the Overseerr settings under "API Keys".*
 
@@ -93,9 +94,9 @@ Clone the repository and set up the environment using `uv`:
 ```bash
 git clone https://github.com/ptbsare/overseerr-mcp-server.git
 cd overseerr-mcp-server
-uv venv # Create virtual environment
+uv venv
 source .venv/bin/activate # On Windows use `.venv\Scripts\activate`
-uv pip install -e . # Install in editable mode
+uv pip install -e .
 ```
 
 ### Running the Server (Development)
@@ -104,7 +105,7 @@ You can run the server directly from the project directory using `uv`:
 
 ```bash
 # Make sure your virtual environment is active
-# Ensure .env file exists or environment variables are set
+# Ensure .env file exists or environment variables are set in config
 uv run overseerr-mcp-server
 ```
 
