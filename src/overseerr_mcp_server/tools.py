@@ -1,18 +1,92 @@
 import os
-from typing import Any, List, Dict, Optional, Sequence
+import json
+from typing import Any, List, Dict, Optional, Sequence, Literal, Union
 from dotenv import load_dotenv
+from pydantic import BaseModel, Field, ValidationError
 
 from .server import app
 from .overseerr import Overseerr
 
 load_dotenv()
 
+# --- Configuration Loading ---
 api_key = os.getenv("OVERSEERR_API_KEY", "")
 url = os.getenv("OVERSEERR_URL", "")
 
 if not api_key or not url:
     raise ValueError("OVERSEERR_API_KEY and OVERSEERR_URL environment variables are required")
 
+# --- Library Mapping ---
+DEFAULT_LIBRARY_MAP = {0: "Default Movie Library", 1: "Default TV Library"}
+library_map_str = os.getenv("LIBRARY_MAP")
+library_map: Dict[int, str] = {}
+library_name_to_id_map: Dict[str, int] = {}
+
+if library_map_str:
+    try:
+        parsed_map = json.loads(library_map_str)
+        if isinstance(parsed_map, dict):
+            # Validate keys are integers (or strings convertible to integers) and values are strings
+            validated_map = {}
+            temp_name_to_id = {}
+            valid = True
+            for k, v in parsed_map.items():
+                try:
+                    server_id = int(k)
+                    if not isinstance(v, str):
+                        print(f"Warning: Invalid value type for key {k} in LIBRARY_MAP. Expected string, got {type(v)}. Skipping.")
+                        valid = False
+                        continue
+                    if v in temp_name_to_id:
+                         print(f"Warning: Duplicate library name '{v}' in LIBRARY_MAP. Skipping entry for key {k}.")
+                         valid = False
+                         continue
+                    validated_map[server_id] = v
+                    temp_name_to_id[v] = server_id
+                except (ValueError, TypeError):
+                    print(f"Warning: Invalid key '{k}' in LIBRARY_MAP. Keys must be integers. Skipping.")
+                    valid = False
+            if valid and validated_map:
+                 library_map = validated_map
+                 library_name_to_id_map = temp_name_to_id
+            else:
+                 print("Warning: LIBRARY_MAP environment variable is invalid or empty after validation. Using default map.")
+                 library_map = DEFAULT_LIBRARY_MAP
+                 library_name_to_id_map = {v: k for k, v in library_map.items()}
+        else:
+            print("Warning: LIBRARY_MAP environment variable is not a valid JSON dictionary. Using default map.")
+            library_map = DEFAULT_LIBRARY_MAP
+            library_name_to_id_map = {v: k for k, v in library_map.items()}
+    except json.JSONDecodeError:
+        print("Warning: Could not decode LIBRARY_MAP environment variable as JSON. Using default map.")
+        library_map = DEFAULT_LIBRARY_MAP
+        library_name_to_id_map = {v: k for k, v in library_map.items()}
+else:
+    print("Info: LIBRARY_MAP environment variable not set. Using default map.")
+    library_map = DEFAULT_LIBRARY_MAP
+    library_name_to_id_map = {v: k for k, v in library_map.items()}
+
+# Ensure default movie/tv libraries exist if map is empty or missing defaults
+default_movie_name = DEFAULT_LIBRARY_MAP[0]
+default_tv_name = DEFAULT_LIBRARY_MAP[1]
+if 0 not in library_map:
+    library_map[0] = default_movie_name
+    if default_movie_name not in library_name_to_id_map: # Avoid overwriting if name exists with different ID
+        library_name_to_id_map[default_movie_name] = 0
+if 1 not in library_map:
+     library_map[1] = default_tv_name
+     if default_tv_name not in library_name_to_id_map: # Avoid overwriting
+        library_name_to_id_map[default_tv_name] = 1
+
+
+VALID_LIBRARY_NAMES = tuple(library_name_to_id_map.keys())
+if not VALID_LIBRARY_NAMES: # Fallback if everything failed somehow
+    VALID_LIBRARY_NAMES = (default_movie_name, default_tv_name)
+    library_name_to_id_map = {default_movie_name: 0, default_tv_name: 1}
+    library_map = {0: default_movie_name, 1: default_tv_name}
+
+
+# --- Media Status Mapping ---
 MEDIA_STATUS_MAPPING = {
     1: "UNKNOWN",
     2: "PENDING",
@@ -209,41 +283,69 @@ async def overseerr_tv_requests(
     return all_results
 
 
+# --- Pydantic Models for Request Tools ---
+
+class BaseRequestArgs(BaseModel):
+    tmdb_id: int = Field(..., description="The The Movie Database (TMDB) ID of the media to request.")
+    user_id: Optional[int] = Field(None, description="Overseerr user ID to make the request as. Overrides environment variable if provided. Defaults to REQUEST_USER_ID env var or 1.")
+
+class MovieRequestArgs(BaseRequestArgs):
+    library_name: Literal[VALID_LIBRARY_NAMES] = Field( # type: ignore
+        default=library_map.get(0, next(iter(VALID_LIBRARY_NAMES))), # Default to serverId 0 name or first available
+        description=f"The target library for the movie request. Choose from: {', '.join(VALID_LIBRARY_NAMES)}"
+    )
+
+class TvRequestArgs(BaseRequestArgs):
+    seasons: Optional[List[int]] = Field(None, description="List of season numbers to request. If omitted or empty, all seasons will be requested.")
+    library_name: Literal[VALID_LIBRARY_NAMES] = Field( # type: ignore
+        default=library_map.get(1, next(iter(VALID_LIBRARY_NAMES))), # Default to serverId 1 name or first available
+        description=f"The target library for the TV show request. Choose from: {', '.join(VALID_LIBRARY_NAMES)}"
+    )
+
+# --- Tool Definitions ---
+
 @app.tool()
-async def overseerr_request_movie(tmdb_id: int, user_id: Optional[int] = None):
-    """Submit a movie request to Overseerr using its TMDB ID.
-
-    Args:
-        tmdb_id (int): The The Movie Database (TMDB) ID of the movie to request.
-        user_id (Optional[int]): Overseerr user ID to make the request as. Overrides environment variable if provided. Defaults to REQUEST_USER_ID env var or 1.
-    """
-    response_text = ""
+async def overseerr_request_movie(args: MovieRequestArgs):
+    """Submit a movie request to Overseerr, specifying the target library."""
     try:
+        server_id = library_name_to_id_map.get(args.library_name)
+        # We should always find the name due to Literal validation, but check defensively
+        if server_id is None:
+             return {"error": f"Internal error: Could not map library name '{args.library_name}' to a server ID."}
+
         async with Overseerr(api_key=api_key, url=url) as client:
-            result = await client.request_movie(tmdb_id=tmdb_id, user_id=user_id)
+            result = await client.request_movie(
+                tmdb_id=args.tmdb_id,
+                user_id=args.user_id,
+                server_id=server_id
+            )
         return result
+    except ValidationError as e:
+         return {"error": f"Invalid arguments: {e}"}
     except Exception as e:
-        response_text = f"Error submitting movie request: {str(e)}"
-        return response_text
+        return {"error": f"Error submitting movie request: {str(e)}"}
 
 
 @app.tool()
-async def overseerr_request_tv(tmdb_id: int, seasons: Optional[List[int]] = None, user_id: Optional[int] = None):
-    """Submit a TV show request to Overseerr using its TMDB ID. Optionally specify seasons.
-
-    Args:
-        tmdb_id (int): The The Movie Database (TMDB) ID of the TV show to request.
-        seasons (Optional[List[int]]): List of season numbers to request. If omitted or empty, all seasons will be requested.
-        user_id (Optional[int]): Overseerr user ID to make the request as. Overrides environment variable if provided. Defaults to REQUEST_USER_ID env var or 1.
-    """
-    response_text = ""
+async def overseerr_request_tv(args: TvRequestArgs):
+    """Submit a TV show request to Overseerr, specifying seasons and the target library."""
     try:
+        server_id = library_name_to_id_map.get(args.library_name)
+        if server_id is None:
+             return {"error": f"Internal error: Could not map library name '{args.library_name}' to a server ID."}
+
         async with Overseerr(api_key=api_key, url=url) as client:
-            result = await client.request_tv(tmdb_id=tmdb_id, seasons=seasons, user_id=user_id)
+            result = await client.request_tv(
+                tmdb_id=args.tmdb_id,
+                seasons=args.seasons,
+                user_id=args.user_id,
+                server_id=server_id
+            )
         return result
+    except ValidationError as e:
+         return {"error": f"Invalid arguments: {e}"}
     except Exception as e:
-        response_text = f"Error submitting TV show request: {str(e)}"
-        return response_text
+        return {"error": f"Error submitting TV show request: {str(e)}"}
 
 
 @app.tool()

@@ -83,23 +83,27 @@ class Overseerr:
     async def get_season_details(self, tv_id: int, season_id: int) -> Dict[str, Any]:
         return await self._safe_request("GET", f"/api/v1/tv/{tv_id}/season/{season_id}")
 
-    async def request_movie(self, tmdb_id: int, user_id: Optional[int] = None) -> Dict[str, Any]:
+    async def request_movie(self, tmdb_id: int, user_id: Optional[int] = None, server_id: Optional[int] = None) -> Dict[str, Any]:
         requesting_user_id = user_id if user_id is not None else self.default_request_user_id
         data = {
             "mediaType": "movie",
             "mediaId": tmdb_id,
             "userId": requesting_user_id
         }
+        if server_id is not None:
+            data["serverId"] = server_id
         return await self._safe_request("POST", "/api/v1/request", json=data)
 
-    async def request_tv(self, tmdb_id: int, seasons: Optional[List[int]] = None, user_id: Optional[int] = None) -> Dict[str, Any]:
+    async def request_tv(self, tmdb_id: int, seasons: Optional[List[int]] = None, user_id: Optional[int] = None, server_id: Optional[int] = None) -> Dict[str, Any]:
         requesting_user_id = user_id if user_id is not None else self.default_request_user_id
         data = {
             "mediaType": "tv",
             "mediaId": tmdb_id,
-            "seasons": seasons if seasons else [-1],
+            "seasons": seasons if seasons else [-1], # Use -1 for all seasons as per Overseerr API convention
             "userId": requesting_user_id
         }
+        if server_id is not None:
+            data["serverId"] = server_id
         return await self._safe_request("POST", "/api/v1/request", json=data)
 
     async def get_requests(self, params: Dict[str, Any] = {}) -> Dict[str, Any]:
