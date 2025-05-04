@@ -118,19 +118,6 @@ jobs:
             }
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - name: Write release note to CHANGELOG.md
-        run: |
-          echo "# v${{ steps.get_version.outputs.VERSION }}" > CHANGELOG.md
-          echo "${{steps.github_release.outputs.changelog}}" >> CHANGELOG.md
-      - name: Commit CHANGELOG.md
-        run: |
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "github-actions[bot]"
-          git add CHANGELOG.md
-          git commit -m "docs(CHANGELOG): update release notes"
-      - name: Push changes
-        run: |
-          git push origin main
       - name: Create Release
         uses: actions/create-release@v1
         env:
