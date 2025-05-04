@@ -11,11 +11,13 @@ Project Repository: [https://github.com/ptbsare/overseerr-mcp-server](https://gi
 The server implements the following tools to interact with Overseerr:
 
 -   `overseerr_status`: Get the status of the Overseerr server.
--   `overseerr_movie_requests`: Get a paginated list of movie requests that satisfy the filter arguments. Accepts optional `status`, `start_date` (YYYY-MM-DDTHH:MM:SS.mmmZ format), `take` (default 7), and `skip` (default 0) parameters.
--   `overseerr_tv_requests`: Get a paginated list of TV show requests that satisfy the filter arguments. Accepts optional `status`, `start_date` (YYYY-MM-DDTHH:MM:SS.mmmZ format), `take` (default 7), and `skip` (default 0) parameters.
--   `overseerr_request_movie`: Submit a movie request using its TMDB ID. Accepts an optional `user_id` parameter to specify the Overseerr user making the request (priority: parameter > `REQUEST_USER_ID` env var > default 1).
--   `overseerr_request_tv`: Submit a TV show request using its TMDB ID, optionally specifying seasons. Accepts an optional `user_id` parameter (same priority as movie requests).
--   `overseerr_search_media`: Search for movies and TV shows available on Overseerr. Accepts `query` and optional `page` (default 1) parameters.
+-   `overseerr_movie_requests`: Get a paginated list of movie requests. Accepts optional `status`, `start_date` (YYYY-MM-DDTHH:MM:SS.mmmZ format), `take` (default 7), and `skip` (default 0).
+-   `overseerr_tv_requests`: Get a paginated list of TV show requests. Accepts optional `status`, `start_date` (YYYY-MM-DDTHH:MM:SS.mmmZ format), `take` (default 7), and `skip` (default 0).
+-   `overseerr_request_movie_to_library`: Submit a movie request using its TMDB ID to a specific library, on behalf of a specific user. Requires `tmdb_id`, `library_name`, and `user_display_name`. Available library names and user display names (unique ones only) are fetched at server startup and included in the tool's argument descriptions.
+-   `overseerr_request_tv_to_library`: Submit a TV show request using its TMDB ID to a specific library, on behalf of a specific user. Requires `tmdb_id`, `library_name`, and `user_display_name`. Optionally accepts `seasons` (list of integers). Available library names and user display names (unique ones only) are fetched at server startup and included in the tool's argument descriptions.
+-   `overseerr_search_media`: Search for movies and TV shows available on Overseerr. Accepts `query` and optional `page` (default 1).
+-   `overseerr_get_available_libraries`: Get the configured Sonarr (TV) and Radarr (Movie) server IDs and names from Overseerr.
+-   `overseerr_get_users`: Get a list of all users configured in Overseerr, including their ID, username, email, displayName, etc.
 
 ### Example prompts
 
@@ -24,19 +26,21 @@ It's good to first instruct your AI assistant (e.g., Claude) to use the Overseer
 Try prompts like these:
 
 -   Get the status of our Overseerr server.
--   Show me the first 5 movie requests that are currently pending. (Uses `take=5`)
--   List all TV show requests from 2024-01-01 that are now available. (Uses `start_date`)
+-   Show me the first 5 movie requests that are currently pending.
+-   List all TV show requests from 2024-01-01 that are now available.
 -   What movies have been requested but are not available yet?
 -   What TV shows have recently become available in our library?
 -   Search for the movie "Dune: Part Two" on Overseerr.
--   Request the movie with TMDB ID 693134 as user 5. (Uses `user_id=5`)
--   Request seasons 1 and 2 for the TV show with TMDB ID 1396.
+-   What movie and TV libraries are configured in Overseerr?
+-   List all users in Overseerr.
+-   Request the movie with TMDB ID 693134 for the user 'John Doe' in the 'Movies HD' library. (Uses `user_display_name='John Doe'`, `library_name='Movies HD'`)
+-   Request seasons 1 and 2 for the TV show with TMDB ID 1396 for user 'Jane Smith' in the 'TV Shows 4K' library. (Uses `user_display_name='Jane Smith'`)
 
 ## Configuration
 
 ### Environment Variables
 
-You need to provide your Overseerr API key and URL. You can also optionally specify a default user ID for requests. There are two ways to configure this:
+You need to provide your Overseerr API key and URL. There are two ways to configure this:
 
 1.  **Add to server config (preferred for clients like Claude Desktop):**
 
@@ -50,31 +54,30 @@ You need to provide your Overseerr API key and URL. You can also optionally spec
           "args": [
              "run",
              "--directory",
-             "/path/to/overseerr-mcp-server",
+             "/path/to/overseerr-mcp-server", // Replace with actual path
              "overseerr-mcp-server"
            ],
           "env": {
             "OVERSEERR_API_KEY": "<your_api_key_here>",
-            "OVERSEERR_URL": "<your_overseerr_url>",
-            "REQUEST_USER_ID": "1"
+            "OVERSEERR_URL": "<your_overseerr_url>"
           }
         }
       }
     }
     ```
     *Replace `/path/to/overseerr-mcp-server` with the actual path where you cloned the repository.*
-    *`REQUEST_USER_ID` is optional; if omitted, requests default to user ID 1 unless overridden by the tool parameter.*
 
 2.  **Create a `.env` file:**
 
     Create a `.env` file in the root directory of the cloned repository (`/path/to/overseerr-mcp-server`) with the following content:
 
     ```dotenv
+    # Required: Your Overseerr API Key
     OVERSEERR_API_KEY=your_api_key_here
+
+    # Required: The URL of your Overseerr instance (e.g., http://localhost:5055)
     OVERSEERR_URL=your_overseerr_url_here
-    REQUEST_USER_ID=1
     ```
-    *`REQUEST_USER_ID` is optional; if omitted, requests default to user ID 1 unless overridden by the tool parameter.*
 
 *Note: You can find the API key in the Overseerr settings under "API Keys".*
 

@@ -2,91 +2,19 @@ import os
 import json
 from typing import Any, List, Dict, Optional, Sequence, Literal, Union
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, create_model
 
-from .server import app
+from .server import app, initial_server_data
 from .overseerr import Overseerr
 
 load_dotenv()
 
-# --- Configuration Loading ---
 api_key = os.getenv("OVERSEERR_API_KEY", "")
 url = os.getenv("OVERSEERR_URL", "")
 
 if not api_key or not url:
     raise ValueError("OVERSEERR_API_KEY and OVERSEERR_URL environment variables are required")
 
-# --- Library Mapping ---
-DEFAULT_LIBRARY_MAP = {0: "Default Movie Library", 1: "Default TV Library"}
-library_map_str = os.getenv("LIBRARY_MAP")
-library_map: Dict[int, str] = {}
-library_name_to_id_map: Dict[str, int] = {}
-
-if library_map_str:
-    try:
-        parsed_map = json.loads(library_map_str)
-        if isinstance(parsed_map, dict):
-            # Validate keys are integers (or strings convertible to integers) and values are strings
-            validated_map = {}
-            temp_name_to_id = {}
-            valid = True
-            for k, v in parsed_map.items():
-                try:
-                    server_id = int(k)
-                    if not isinstance(v, str):
-                        print(f"Warning: Invalid value type for key {k} in LIBRARY_MAP. Expected string, got {type(v)}. Skipping.")
-                        valid = False
-                        continue
-                    if v in temp_name_to_id:
-                         print(f"Warning: Duplicate library name '{v}' in LIBRARY_MAP. Skipping entry for key {k}.")
-                         valid = False
-                         continue
-                    validated_map[server_id] = v
-                    temp_name_to_id[v] = server_id
-                except (ValueError, TypeError):
-                    print(f"Warning: Invalid key '{k}' in LIBRARY_MAP. Keys must be integers. Skipping.")
-                    valid = False
-            if valid and validated_map:
-                 library_map = validated_map
-                 library_name_to_id_map = temp_name_to_id
-            else:
-                 print("Warning: LIBRARY_MAP environment variable is invalid or empty after validation. Using default map.")
-                 library_map = DEFAULT_LIBRARY_MAP
-                 library_name_to_id_map = {v: k for k, v in library_map.items()}
-        else:
-            print("Warning: LIBRARY_MAP environment variable is not a valid JSON dictionary. Using default map.")
-            library_map = DEFAULT_LIBRARY_MAP
-            library_name_to_id_map = {v: k for k, v in library_map.items()}
-    except json.JSONDecodeError:
-        print("Warning: Could not decode LIBRARY_MAP environment variable as JSON. Using default map.")
-        library_map = DEFAULT_LIBRARY_MAP
-        library_name_to_id_map = {v: k for k, v in library_map.items()}
-else:
-    print("Info: LIBRARY_MAP environment variable not set. Using default map.")
-    library_map = DEFAULT_LIBRARY_MAP
-    library_name_to_id_map = {v: k for k, v in library_map.items()}
-
-# Ensure default movie/tv libraries exist if map is empty or missing defaults
-default_movie_name = DEFAULT_LIBRARY_MAP[0]
-default_tv_name = DEFAULT_LIBRARY_MAP[1]
-if 0 not in library_map:
-    library_map[0] = default_movie_name
-    if default_movie_name not in library_name_to_id_map: # Avoid overwriting if name exists with different ID
-        library_name_to_id_map[default_movie_name] = 0
-if 1 not in library_map:
-     library_map[1] = default_tv_name
-     if default_tv_name not in library_name_to_id_map: # Avoid overwriting
-        library_name_to_id_map[default_tv_name] = 1
-
-
-VALID_LIBRARY_NAMES = tuple(library_name_to_id_map.keys())
-if not VALID_LIBRARY_NAMES: # Fallback if everything failed somehow
-    VALID_LIBRARY_NAMES = (default_movie_name, default_tv_name)
-    library_name_to_id_map = {default_movie_name: 0, default_tv_name: 1}
-    library_map = {0: default_movie_name, 1: default_tv_name}
-
-
-# --- Media Status Mapping ---
 MEDIA_STATUS_MAPPING = {
     1: "UNKNOWN",
     2: "PENDING",
@@ -283,40 +211,55 @@ async def overseerr_tv_requests(
     return all_results
 
 
-# --- Pydantic Models for Request Tools ---
+movie_names_str = ", ".join(f"'{name}'" for name in initial_server_data['movie_names']) or "None fetched"
+tv_names_str = ", ".join(f"'{name}'" for name in initial_server_data['tv_names']) or "None fetched"
+display_names_str = ", ".join(f"'{name}'" for name in initial_server_data['user_display_names']) or "None fetched (or duplicates exist)"
 
-class BaseRequestArgs(BaseModel):
-    tmdb_id: int = Field(..., description="The The Movie Database (TMDB) ID of the media to request.")
-    user_id: Optional[int] = Field(None, description="Overseerr user ID to make the request as. Overrides environment variable if provided. Defaults to REQUEST_USER_ID env var or 1.")
+movie_request_description = f"""Submit a movie request to a specific Overseerr library identified by its name, on behalf of a specific user.
 
-class MovieRequestArgs(BaseRequestArgs):
-    library_name: Literal[VALID_LIBRARY_NAMES] = Field( # type: ignore
-        default=library_map.get(0, next(iter(VALID_LIBRARY_NAMES))), # Default to serverId 0 name or first available
-        description=f"The target library for the movie request. Choose from: {', '.join(VALID_LIBRARY_NAMES)}"
-    )
+Args:
+    tmdb_id (int): The The Movie Database (TMDB) ID of the movie to request.
+    library_name (str): The name of the target Radarr (Movie) library configured in Overseerr. Must match exactly. Available: {movie_names_str}.
+    user_display_name (str): The exact display name of the Overseerr user making the request. Available: {display_names_str}.
+"""
 
-class TvRequestArgs(BaseRequestArgs):
-    seasons: Optional[List[int]] = Field(None, description="List of season numbers to request. If omitted or empty, all seasons will be requested.")
-    library_name: Literal[VALID_LIBRARY_NAMES] = Field( # type: ignore
-        default=library_map.get(1, next(iter(VALID_LIBRARY_NAMES))), # Default to serverId 1 name or first available
-        description=f"The target library for the TV show request. Choose from: {', '.join(VALID_LIBRARY_NAMES)}"
-    )
+tv_request_description = f"""Submit a TV show request to a specific Overseerr library identified by its name, on behalf of a specific user.
 
-# --- Tool Definitions ---
+Args:
+    tmdb_id (int): The The Movie Database (TMDB) ID of the TV show to request.
+    library_name (str): The name of the target Sonarr (TV) library configured in Overseerr. Must match exactly. Available: {tv_names_str}.
+    user_display_name (str): The exact display name of the Overseerr user making the request. Available: {display_names_str}.
+    seasons (Optional[List[int]]): List of season numbers to request. If omitted or empty, all seasons will be requested.
+"""
 
-@app.tool()
-async def overseerr_request_movie(args: MovieRequestArgs):
-    """Submit a movie request to Overseerr, specifying the target library."""
+@app.tool(description=movie_request_description)
+async def overseerr_request_movie_to_library(
+    tmdb_id: int,
+    library_name: str,
+    user_display_name: str
+):
+    """(Description is provided dynamically to the decorator)"""
     try:
-        server_id = library_name_to_id_map.get(args.library_name)
-        # We should always find the name due to Literal validation, but check defensively
+        library_map = initial_server_data["movie_map"]
+        if not library_map:
+             return {"error": "Movie library configuration not available (fetch failed on startup?)."}
+        server_id = library_map.get(library_name)
         if server_id is None:
-             return {"error": f"Internal error: Could not map library name '{args.library_name}' to a server ID."}
+             available_library_names = ", ".join(f"'{name}'" for name in sorted(library_map.keys()))
+             return {"error": f"Invalid library name '{library_name}'. Available movie libraries: {available_library_names}"}
+
+        user_map = initial_server_data["user_display_name_map"]
+        if not user_map:
+             return {"error": "User configuration not available (fetch failed on startup or duplicates exist?)."}
+        requesting_user_id = user_map.get(user_display_name)
+        if requesting_user_id is None:
+            available_user_names = ", ".join(f"'{name}'" for name in sorted(user_map.keys()))
+            return {"error": f"Invalid user display name '{user_display_name}'. Available display names: {available_user_names}"}
 
         async with Overseerr(api_key=api_key, url=url) as client:
             result = await client.request_movie(
-                tmdb_id=args.tmdb_id,
-                user_id=args.user_id,
+                tmdb_id=tmdb_id,
+                user_id=requesting_user_id,
                 server_id=server_id
             )
         return result
@@ -325,20 +268,36 @@ async def overseerr_request_movie(args: MovieRequestArgs):
     except Exception as e:
         return {"error": f"Error submitting movie request: {str(e)}"}
 
-
-@app.tool()
-async def overseerr_request_tv(args: TvRequestArgs):
-    """Submit a TV show request to Overseerr, specifying seasons and the target library."""
+@app.tool(description=tv_request_description)
+async def overseerr_request_tv_to_library(
+    tmdb_id: int,
+    library_name: str,
+    user_display_name: str,
+    seasons: Optional[List[int]] = None
+):
+    """(Description is provided dynamically to the decorator)"""
     try:
-        server_id = library_name_to_id_map.get(args.library_name)
+        library_map = initial_server_data["tv_map"]
+        if not library_map:
+             return {"error": "TV library configuration not available (fetch failed on startup?)."}
+        server_id = library_map.get(library_name)
         if server_id is None:
-             return {"error": f"Internal error: Could not map library name '{args.library_name}' to a server ID."}
+             available_library_names = ", ".join(f"'{name}'" for name in sorted(library_map.keys()))
+             return {"error": f"Invalid library name '{library_name}'. Available TV libraries: {available_library_names}"}
+
+        user_map = initial_server_data["user_display_name_map"]
+        if not user_map:
+             return {"error": "User configuration not available (fetch failed on startup or duplicates exist?)."}
+        requesting_user_id = user_map.get(user_display_name)
+        if requesting_user_id is None:
+            available_user_names = ", ".join(f"'{name}'" for name in sorted(user_map.keys()))
+            return {"error": f"Invalid user display name '{user_display_name}'. Available display names: {available_user_names}"}
 
         async with Overseerr(api_key=api_key, url=url) as client:
             result = await client.request_tv(
-                tmdb_id=args.tmdb_id,
-                seasons=args.seasons,
-                user_id=args.user_id,
+                tmdb_id=tmdb_id,
+                seasons=seasons,
+                user_id=requesting_user_id,
                 server_id=server_id
             )
         return result
@@ -411,3 +370,90 @@ async def overseerr_search_media(query: str, page: int = 1):
 
     except Exception as e:
         return {"error": f"Error searching media: {str(e)}"}
+
+@app.tool()
+async def overseerr_get_available_libraries():
+    """Get the configured Sonarr (TV) and Radarr (Movie) server IDs and names from Overseerr."""
+    results = {"movies": [], "tv_shows": []}
+    errors = []
+    try:
+        async with Overseerr(api_key=api_key, url=url) as client:
+            try:
+                radarr_servers = await client.get_radarr_servers()
+                for server in radarr_servers:
+                    if server.get("id") is not None and server.get("name"):
+                        results["movies"].append({
+                            "id": server["id"],
+                            "name": server["name"],
+                            "is_default": server.get("isDefault", False)
+                        })
+            except Exception as e:
+                errors.append(f"Error fetching Radarr servers: {str(e)}")
+
+            try:
+                sonarr_servers = await client.get_sonarr_servers()
+                for server in sonarr_servers:
+                     if server.get("id") is not None and server.get("name"):
+                        results["tv_shows"].append({
+                            "id": server["id"],
+                            "name": server["name"],
+                            "is_default": server.get("isDefault", False)
+                        })
+            except Exception as e:
+                errors.append(f"Error fetching Sonarr servers: {str(e)}")
+
+        if errors:
+            results["errors"] = errors
+
+        if not results["movies"] and not results["tv_shows"] and not errors:
+             return {"message": "No Sonarr or Radarr servers configured in Overseerr."}
+
+        return results
+
+    except Exception as e:
+        return {"error": f"An unexpected error occurred: {str(e)}"}
+
+@app.tool()
+async def overseerr_get_users():
+    """Get a list of all users configured in Overseerr."""
+    all_users = []
+    take = 50
+    skip = 0
+    page = 1
+    total_pages = 1
+
+    try:
+        async with Overseerr(api_key=api_key, url=url) as client:
+            while page <= total_pages:
+                try:
+                    response = await client.get_users(take=take, skip=skip)
+                    page_info = response.get("pageInfo", {})
+                    results = response.get("results", [])
+
+                    for user in results:
+                        user_data = {
+                            "id": user.get("id"),
+                            "email": user.get("email"),
+                            "displayName": user.get("displayName"),
+                            "username": user.get("username"),
+                            "plexUsername": user.get("plexUsername"),
+                            "userType": user.get("userType"),
+                            "role": "Admin" if 1024 & user.get("permissions", 0) else "User",
+                            "createdAt": user.get("createdAt"),
+                        }
+                        all_users.append({k: v for k, v in user_data.items() if v is not None})
+
+                    total_pages = page_info.get("pages", 1)
+                    page += 1
+                    skip = (page - 1) * take
+
+                except Exception as e:
+                    return {"error": f"Error fetching users (page {page}): {str(e)}"}
+
+        if not all_users:
+            return {"message": "No users found in Overseerr."}
+
+        return {"users": all_users, "total_count": len(all_users)}
+
+    except Exception as e:
+        return {"error": f"An unexpected error occurred while fetching users: {str(e)}"}

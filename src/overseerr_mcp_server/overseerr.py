@@ -13,11 +13,6 @@ class Overseerr:
         self.url = url.rstrip('/')
         self.timeout = httpx.Timeout(timeout[0], connect=timeout[1])
         self._client: Optional[httpx.AsyncClient] = None
-        request_user_id_str = os.getenv("REQUEST_USER_ID", "1")
-        try:
-            self.default_request_user_id = int(request_user_id_str)
-        except ValueError:
-            self.default_request_user_id = 1
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
@@ -83,24 +78,22 @@ class Overseerr:
     async def get_season_details(self, tv_id: int, season_id: int) -> Dict[str, Any]:
         return await self._safe_request("GET", f"/api/v1/tv/{tv_id}/season/{season_id}")
 
-    async def request_movie(self, tmdb_id: int, user_id: Optional[int] = None, server_id: Optional[int] = None) -> Dict[str, Any]:
-        requesting_user_id = user_id if user_id is not None else self.default_request_user_id
+    async def request_movie(self, tmdb_id: int, user_id: int, server_id: Optional[int] = None) -> Dict[str, Any]:
         data = {
             "mediaType": "movie",
             "mediaId": tmdb_id,
-            "userId": requesting_user_id
+            "userId": user_id
         }
         if server_id is not None:
             data["serverId"] = server_id
         return await self._safe_request("POST", "/api/v1/request", json=data)
 
-    async def request_tv(self, tmdb_id: int, seasons: Optional[List[int]] = None, user_id: Optional[int] = None, server_id: Optional[int] = None) -> Dict[str, Any]:
-        requesting_user_id = user_id if user_id is not None else self.default_request_user_id
+    async def request_tv(self, tmdb_id: int, user_id: int, seasons: Optional[List[int]] = None, server_id: Optional[int] = None) -> Dict[str, Any]:
         data = {
             "mediaType": "tv",
             "mediaId": tmdb_id,
-            "seasons": seasons if seasons else [-1], # Use -1 for all seasons as per Overseerr API convention
-            "userId": requesting_user_id
+            "seasons": seasons if seasons else [-1],
+            "userId": user_id
         }
         if server_id is not None:
             data["serverId"] = server_id
@@ -116,6 +109,19 @@ class Overseerr:
             "page": page
         }
         return await self._safe_request("GET", "/api/v1/search", params=params)
+
+    async def get_sonarr_servers(self) -> List[Dict[str, Any]]:
+        """Gets the list of configured Sonarr servers."""
+        return await self._safe_request("GET", "/api/v1/service/sonarr")
+
+    async def get_radarr_servers(self) -> List[Dict[str, Any]]:
+        """Gets the list of configured Radarr servers."""
+        return await self._safe_request("GET", "/api/v1/service/radarr")
+
+    async def get_users(self, take: int = 50, skip: int = 0) -> Dict[str, Any]:
+         """Gets a paginated list of Overseerr users."""
+         params = {"take": take, "skip": skip}
+         return await self._safe_request("GET", "/api/v1/user", params=params)
 
     async def __aenter__(self):
         await self._get_client()
